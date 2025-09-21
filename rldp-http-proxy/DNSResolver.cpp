@@ -90,7 +90,7 @@ void DNSResolver::resolve_recursive(std::string full_host, std::string current_h
                 // CASE C: Recursive Step (Next Resolver)
                 [&](tonlib_api::dns_entryDataNextResolver &next) {
                   // Assuming `tonlib` provides the number of resolved bits.
-                  size_t bytes_resolved = resolved_obj->resolved_prefix_ / 8;
+                  size_t bytes_resolved = resolved_obj->resolved_prefix / 8;
                   if (bytes_resolved > current_host_part.size()) {
                       promise.set_error(td::Status::Error("Invalid resolved prefix from DNS"));
                       handled = true;
