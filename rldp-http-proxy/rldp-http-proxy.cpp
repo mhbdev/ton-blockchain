@@ -1601,7 +1601,16 @@ void RldpTcpTunnel::start_up() {
 }
 
 int main(int argc, char *argv[]) {
-  SET_VERBOSITY_LEVEL(verbosity_WARNING);
+  int verbosity = 3;  // default
+  if (const char* env = std::getenv("VERBOSITY")) {
+      verbosity = std::atoi(env);
+  }
+
+  // Set TDLib verbosity
+  SET_VERBOSITY_LEVEL(verbosity);
+
+  // Set default log interface (stdout)
+  td::log_interface = td::default_log_interface;
 
   td::set_default_failure_signal_handler().ensure();
 
