@@ -1,49 +1,43 @@
-/*
-    This file is part of TON Blockchain source code.
-
-    TON Blockchain is free software; you can redistribute it and/or
-    modify it under the terms of the GNU General Public License
-    as published by the Free Software Foundation; either version 2
-    of the License, or (at your option) any later version.
-
-    TON Blockchain is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with TON Blockchain.  If not, see <http://www.gnu.org/licenses/>.
-
-    In addition, as a special exception, the copyright holders give permission
-    to link the code of portions of this program with the OpenSSL library.
-    You must obey the GNU General Public License in all respects for all
-    of the code used other than OpenSSL. If you modify file(s) with this
-    exception, you may extend this exception to your version of the file(s),
-    but you are not obligated to do so. If you do not wish to do so, delete this
-    exception statement from your version. If you delete this exception statement
-    from all source files in the program, then also delete it here.
-*/
 #pragma once
 #include "td/actor/actor.h"
 #include "tonlib/tonlib/TonlibClientWrapper.h"
 #include "adnl/adnl.h"
 #include "td/actor/PromiseFuture.h"
+#include "td/utils/crypto.h"
+#include <vector>
+#include <map>
+#include <string>
 
 class DNSResolver : public td::actor::Actor {
- public:
+public:
   explicit DNSResolver(td::actor::ActorId<tonlib::TonlibClientWrapper> tonlib_client);
 
   void start_up() override;
   void resolve(std::string host, td::Promise<std::string> promise);
 
- private:
+private:
+  static constexpr uint16_t CATEGORY_NEXT_RESOLVER = 0xba93;
+  static constexpr uint16_t CATEGORY_CONTRACT_ADDR = 0x9fd3;
+  static constexpr uint16_t CATEGORY_ADNL_SITE = 0xad01;
+  static constexpr uint16_t CATEGORY_STORAGE_SITE = 0x7473;
+
   static constexpr int MAX_DNS_HOPS = 4;
+
   void sync();
   void save_to_cache(std::string host, std::string address);
 
-  void resolve_recursive(std::string full_host, std::string current_host_part,
-                         tonlib_api::object_ptr<tonlib_api::accountAddress> resolver_address, int depth,
+  void resolve_recursive(std::string full_host,
+                         std::vector<uint8_t> domain_chain,
+                         tonlib_api::object_ptr<tonlib_api::accountAddress> resolver_address,
+                         int depth,
                          td::Promise<std::string> promise);
+
+  std::vector<uint8_t> prepare_domain_name(const std::string& domain);
+  td::Bits256 calculate_record_hash(const std::string& record_name);
+
+  // helper to forward smc_runGetMethod
+  void forward_runGetMethod(tonlib_api::object_ptr<tonlib_api::smc_runGetMethod> run_obj,
+                            td::Promise<tonlib_api::object_ptr<tonlib_api::smc_runResult>> run_promise);
 
   td::actor::ActorId<tonlib::TonlibClientWrapper> tonlib_client_;
 
