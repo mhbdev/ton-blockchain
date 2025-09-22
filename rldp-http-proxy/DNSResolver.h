@@ -41,7 +41,7 @@ class DNSResolver : public td::actor::Actor {
   void sync();
   void save_to_cache(std::string host, std::string address);
 
-  void resolve_recursive(std::string full_host,
+  void resolve_recursive(std::string full_host, std::string current_host_part,
                          tonlib_api::object_ptr<tonlib_api::accountAddress> resolver_address, int depth,
                          td::Promise<std::string> promise);
 

@@ -52,12 +52,14 @@ void DNSResolver::sync() {
 }
 
 void DNSResolver::resolve(std::string host, td::Promise<std::string> promise) {
-  // Cache check remains the same
+  LOG(INFO) << "[DNS TRACE] Received initial request to resolve: " << host;
+
   auto it = cache_.find(host);
   if (it != cache_.end()) {
     const CacheEntry &entry = it->second;
     double now = td::Time::now();
     if (now < entry.created_at_ + CACHE_TIMEOUT_HARD) {
+      LOG(INFO) << "[DNS TRACE] Found valid cache entry for " << host;
       promise.set_result(entry.address_);
       promise.reset();
       if (now < entry.created_at_ + CACHE_TIMEOUT_SOFT) {
@@ -66,53 +68,58 @@ void DNSResolver::resolve(std::string host, td::Promise<std::string> promise) {
     }
   }
 
-  // Kick off the recursive process. The initial call uses `nullptr` for
-  // resolver_address to start at the root DNS.
-  resolve_recursive(std::move(host), nullptr, 0, std::move(promise));
+  resolve_recursive(host, host, nullptr, 0, std::move(promise));
 }
 
-// DNSResolver.cpp
-
-void DNSResolver::resolve_recursive(std::string full_host,
+void DNSResolver::resolve_recursive(std::string full_host, std::string current_host_part,
                                     tonlib_api::object_ptr<tonlib_api::accountAddress> resolver_address, int depth,
                                     td::Promise<std::string> promise) {
-  // 1. Security Check: Prevent infinite loops
+  LOG(INFO) << "[DNS TRACE] [Depth " << depth << "] Resolving '" << current_host_part
+            << "' using resolver: " << (resolver_address ? resolver_address->account_address_ : "Root DNS");
+
   if (depth >= MAX_DNS_HOPS) {
+    LOG(ERROR) << "[DNS TRACE] [Depth " << depth << "] FAILED: DNS resolution depth limit exceeded for " << full_host;
     promise.set_error(td::Status::Error("DNS resolution depth limit exceeded"));
     return;
   }
 
-  // 2. Build and Send the Request to tonlib
   td::Bits256 category = td::sha256_bits256(td::Slice("site", 4));
-  // The TTL of 16 is a reasonable default. The `full_host` is passed each time.
-  auto obj = tonlib_api::make_object<tonlib_api::dns_resolve>(std::move(resolver_address), full_host, category, 16);
+  // The TTL of 16 is a reasonable default.
+  auto obj = tonlib_api::make_object<tonlib_api::dns_resolve>(std::move(resolver_address), current_host_part, category, 16);
 
   auto P = td::PromiseCreator::lambda(
       [SelfId = actor_id(this), promise = std::move(promise), full_host, depth](
           td::Result<tonlib_api::object_ptr<tonlib_api::dns_resolved>> R) mutable {
         if (R.is_error()) {
+          LOG(ERROR) << "[DNS TRACE] [Depth " << depth << "] FAILED: tonlib returned error: " << R.error();
           promise.set_result(R.move_as_error());
           return;
         }
         auto resolved_obj = R.move_as_ok();
-        
+
         if (resolved_obj->entries_.empty()) {
+          LOG(WARNING) << "[DNS TRACE] [Depth " << depth << "] FAILED: No DNS entries found for " << full_host;
           promise.set_error(td::Status::Error("no DNS entries found"));
           return;
         }
 
-        // 3. Process the Result
         tonlib_api::downcast_call(
             *resolved_obj->entries_[0]->entry_,
             td::overloaded(
                 // --- CASE A: RECURSIVE STEP (Next Resolver Found) ---
                 [&](tonlib_api::dns_entryDataNextResolver &next) {
-                  // The chain continues. Call ourself with the new resolver address.
+                  // The unresolved part of the domain is in the 'name_' field of the returned entry.
+                  // We must use this for the next recursive call.
+                  std::string remaining_host_part = resolved_obj->entries_[0]->name_;
+
+                  LOG(INFO) << "[DNS TRACE] [Depth " << depth << "] Found next_resolver: " << next.resolver_->account_address_ << ", remaining part: " << remaining_host_part;
+                  
                   td::actor::send_closure(SelfId, &DNSResolver::resolve_recursive, std::move(full_host),
-                                          std::move(next.resolver_), depth + 1, std::move(promise));
+                                          std::move(remaining_host_part), std::move(next.resolver_), depth + 1, std::move(promise));
                 },
                 // --- CASE B: FINAL ANSWER (ADNL Address) ---
                 [&](tonlib_api::dns_entryDataAdnlAddress &x) {
+                  LOG(INFO) << "[DNS TRACE] [Depth " << depth << "] SUCCESS: Found final ADNL address: " << x.adnl_address_->adnl_address_;
                   auto R = ton::adnl::AdnlNodeIdShort::parse(x.adnl_address_->adnl_address_);
                   if (R.is_ok()) {
                     std::string final_address = R.move_as_ok().serialize() + ".adnl";
@@ -124,12 +131,14 @@ void DNSResolver::resolve_recursive(std::string full_host,
                 },
                 // --- CASE C: FINAL ANSWER (Storage Bag ID) ---
                 [&](tonlib_api::dns_entryDataStorageAddress &x) {
+                    LOG(INFO) << "[DNS TRACE] [Depth " << depth << "] SUCCESS: Found final Storage address: " << td::to_lower(x.bag_id_.to_hex());
                     std::string final_address = td::to_lower(x.bag_id_.to_hex()) + ".bag";
                     td::actor::send_closure(SelfId, &DNSResolver::save_to_cache, full_host, final_address);
                     promise.set_result(std::move(final_address));
                 },
                 // --- CASE D: UNHANDLED RECORD (End of the line) ---
                 [&](auto &x) {
+                    LOG(ERROR) << "[DNS TRACE] [Depth " << depth << "] FAILED: Unsupported record type returned for " << full_host;
                     if (promise) {
                         promise.set_error(td::Status::Error(
                             "DNS resolution failed: unsupported or no final record type returned"));
