@@ -37,7 +37,7 @@ class DNSResolver : public td::actor::Actor {
   void resolve(std::string host, td::Promise<std::string> promise);
 
  private:
-  static constexpr int MAX_DNS_HOPS = 2;
+  static constexpr int MAX_DNS_HOPS = 4;
   void sync();
   void save_to_cache(std::string host, std::string address);
 
